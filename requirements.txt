@@ -1,0 +1,7 @@
+python-dotenv
+seleniumbase
+tkcalendar
+keyboard
+pandas
+parsel
+requests

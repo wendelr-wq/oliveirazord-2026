@@ -1,0 +1,108 @@
+{
+    "convenios": [
+        {
+            "nome": "SEGURANÇA PRESENTE",
+            "value": "198",
+            "id": 1
+        },
+        {
+            "nome": "08 BPM - RAS",
+            "value": "54",
+            "id": 2
+        },
+        {
+            "nome": "10 BPM - RAS",
+            "value": "53",
+            "id": 3
+        },
+        {
+            "nome": "11 BPM - RAS",
+            "value": "39",
+            "id": 4
+        },
+        {
+            "nome": "26 BPM - RAS",
+            "value": "41",
+            "id": 5
+        },
+        {
+            "nome": "28 BPM - RAS",
+            "value": "71",
+            "id": 6
+        },
+        {
+            "nome": "29 BPM - RAS",
+            "value": "45",
+            "id": 7
+        },
+        {
+            "nome": "32 BPM - RAS",
+            "value": "38",
+            "id": 8
+        },
+        {
+            "nome": "36 BPM - RAS",
+            "value": "74",
+            "id": 9
+        },
+        {
+            "nome": "38 BPM - RAS",
+            "value": "66",
+            "id": 10
+        },
+        {
+            "nome": "39 BPM - RAS",
+            "value": "33",
+            "id": 11
+        },
+        {
+            "nome": "CEDAE",
+            "value": "1",
+            "id": 12
+        },
+        {
+            "nome": "LIGHT",
+            "value": "3",
+            "id": 13
+        },
+        {
+            "nome": "UNIVERSIDADE DO ESTADO DO NORTE FLUMINENSE",
+            "value": "29",
+            "id": null
+        },
+        {
+            "nome": "DEFENSORIA PÚBLICA DO ESTADO DO RIO DE JANEIRO",
+            "value": "240",
+            "id": null
+        },
+        {
+            "nome": "MUNICÍPIO DE VOLTA REDONDA",
+            "value": "238",
+            "id": null
+        },
+        {
+            "nome": "MUNICÍPIO DE PINHEIRAL",
+            "value": "1262",
+            "id": null
+        },
+        {
+            "nome": "MINISTÉRIO PÚBLICO DO ESTADO DO RIO DE JANEIRO",
+            "value": "1280",
+            "id": null
+        },
+        {
+            "nome": "MUNICÍPIO DE SÃO JOÃO DA BARRA",
+            "value": "211",
+            "id": null
+        },
+        {
+            "nome": "PREFEITURA ANGRA DOS REIS",
+            "value": "205",
+            "id": null
+        },
+        {
+            "nome": "33 BPM - RAS",
+            "value": "70"
+        }
+    ]
+}

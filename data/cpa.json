@@ -1,0 +1,68 @@
+{
+    "cpa": [
+        {
+            "nome": "8º BPM - 6º CPA",
+            "value": "31",
+            "id": 1
+        },
+        {
+            "nome": "10º BPM - 5º CPA",
+            "value": "27",
+            "id": 2
+        },
+        {
+            "nome": "11º BPM - 7º CPA",
+            "value": "35",
+            "id": 3
+        },
+        {
+            "nome": "12º BPM - 4º CPA",
+            "value": "24",
+            "id": 4
+        },
+        {
+            "nome": "26º BPM - 7º CPA",
+            "value": "36",
+            "id": 5
+        },
+        {
+            "nome": "28º BPM - 5º CPA",
+            "value": "28",
+            "id": 6
+        },
+        {
+            "nome": "39º BPM - 3º CPA",
+            "value": "22",
+            "id": 11
+        },
+        {
+            "nome": "5º BPM - 1º CPA",
+            "value": "4",
+            "id": 12
+        },
+        {
+            "nome": "38º BPM - 7º CPA",
+            "value": "38",
+            "id": null
+        },
+        {
+            "nome": "29º BPM - 6º CPA",
+            "value": "32",
+            "id": null
+        },
+        {
+            "nome": "36º BPM - 6º CPA",
+            "value": "34",
+            "id": null
+        },
+        {
+            "nome": "32º BPM - 6º CPA",
+            "value": "33",
+            "id": null
+        },
+        {
+            "nome": "33º BPM - 5º CPA",
+            "value": "29"
+        }
+    ]
+}
