@@ -50,7 +50,13 @@ echo.
 echo   [  %ESC%[32mOK%ESC%[0m  ] Python encontrado no sistema.
 echo.
 
-:: 2. Criar VENV
+:: 2. Remover VENV antiga (se existir) para evitar conflito de caminhos absolutos
+if exist "venv" (
+    echo   [ %ESC%[33mWAIT%ESC%[0m ] Removendo ambiente virtual anterior...
+    rmdir /s /q "venv" >nul 2>&1
+)
+
+:: 3. Criar VENV
 echo   [ %ESC%[33mWAIT%ESC%[0m ] Criando ambiente virtual venv...
 
 :: Animação de progresso usando redraw da tela com ASCII puro
@@ -84,7 +90,7 @@ echo   [  %ESC%[32mOK%ESC%[0m  ] Python encontrado no sistema.
 echo   [  %ESC%[32mOK%ESC%[0m  ] Ambiente virtual venv criado com sucesso!
 echo.
 
-:: 3. Ativar VENV e Atualizar pip
+:: 4. Ativar VENV e Atualizar pip
 echo   [ %ESC%[33mWAIT%ESC%[0m ] Ativando ambiente virtual...
 call venv\Scripts\activate.bat >nul 2>&1
 if %errorlevel% neq 0 (
@@ -114,12 +120,12 @@ echo   [  %ESC%[32mOK%ESC%[0m  ] Ambiente virtual ativado.
 echo   [  %ESC%[32mOK%ESC%[0m  ] Pip atualizado.
 echo.
 
-:: 4. Instalar Dependências
+:: 5. Instalar Dependências
 echo %ESC%[36m[*] Instalando as dependências do requirements.txt...%ESC%[0m
 echo %ESC%[90m(Isso pode levar alguns minutos. Por favor, aguarde...)%ESC%[0m
 echo.
 
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 if %errorlevel% neq 0 (
     echo.
     echo   [ %ESC%[31mFAIL%ESC%[0m ] Falha ao instalar as dependências.
