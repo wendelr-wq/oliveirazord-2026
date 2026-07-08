@@ -484,8 +484,10 @@ class MegazordApp:
             if self.automacao and self.automacao.sb is not None:
                 self.automacao.abrir_painel_duplo_agendamento()
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Erro ao abrir painel: {e}")
+            import traceback
+            traceback.print_exc()
 
         if self.thread_automacao and self.thread_automacao.is_alive():
             self.root.after(500, self._aguardar_automacao_e_abrir_painel)
