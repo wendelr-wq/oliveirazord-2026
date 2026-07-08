@@ -2914,6 +2914,53 @@ class AutomacaoProeis:
 
     # ==================== HOTKEYS / DISPAROS ====================
 
+    def _agendamento_executar_login(self):
+        """
+        Login disparado pelo agendamento automático.
+        Navega para a página de login primeiro (independente de onde o navegador estiver)
+        e depois executa o login completo com captcha.
+        """
+        try:
+            if self.login_em_andamento:
+                print("⏳ Login já em andamento.")
+                return
+
+            if not self.sb or not self.sb.driver:
+                print("❌ Navegador não iniciado. Login agendado não pode ser executado.")
+                return
+
+            print("📅 Agendamento: navegando para a página de login do PROEIS...")
+            self.sb.open(PROEIS_URL)
+            self.sb.wait_for_ready_state_complete(timeout=20)
+            self.sb.sleep(0.5)
+
+            # Verifica se chegou na página de login
+            if not self.esta_na_pagina_login():
+                print("⚠️ Agendamento: não chegou na página de login. Tentando novamente...")
+                self.sb.open(PROEIS_URL)
+                self.sb.wait_for_ready_state_complete(timeout=15)
+                self.sb.sleep(0.5)
+
+            if not self.esta_na_pagina_login():
+                print("❌ Agendamento: não foi possível acessar a página de login do PROEIS.")
+                if self.agendamento_status_var:
+                    self.agendamento_status_var.set("❌ Falha ao acessar login. Verifique a conexão.")
+                return
+
+            print("✅ Agendamento: na página de login. Executando login automático...")
+            if self.agendamento_status_var:
+                self.agendamento_status_var.set("Executando login automático pelo agendamento...")
+
+            self.retomar_automaticamente_apos_login = False
+            self.login_sucesso = False
+            self.login_em_andamento = True
+            self._executar_login_sem_lock()
+
+        except Exception as e:
+            print(f"❌ Erro no login agendado: {e}")
+            if self.agendamento_status_var:
+                self.agendamento_status_var.set(f"Erro no login agendado: {e}")
+
     def solicitar_login(self):
         if self.login_em_andamento:
             print("⏳ Login já em andamento.")
@@ -3339,6 +3386,34 @@ class AutomacaoProeis:
         ).pack(side="left", expand=True, fill="both", padx=(5, 0), pady=4)
 
         self.janela_agendamento.protocol("WM_DELETE_WINDOW", self.fechar_painel_duplo_agendamento)
+
+        # Se havia um agendamento rodando em background, restaura o estado no painel recém-aberto
+        if self.agendamento_rodando:
+            if self.login_horario_alvo_texto:
+                self.login_alvo_var.set(f"Login agendado para: {self.login_horario_alvo_texto}")
+                # Preenche os Spinboxes com o horário configurado
+                try:
+                    lh, lm, ls = self.login_horario_alvo_texto.split(":")
+                    self.login_horas_var.set(lh)
+                    self.login_minutos_var.set(lm)
+                    self.login_segundos_var.set(ls)
+                except Exception:
+                    pass
+            if self.disparo_horario_alvo_texto:
+                self.disparo_alvo_var.set(f"Disparo agendado para: {self.disparo_horario_alvo_texto}")
+                try:
+                    dh, dm, ds = self.disparo_horario_alvo_texto.split(":")
+                    self.disparo_horas_var.set(dh)
+                    self.disparo_minutos_var.set(dm)
+                    self.disparo_segundos_var.set(ds)
+                except Exception:
+                    pass
+            etapa_str = "login" if self.etapa_atual == "login" else "disparo"
+            self.agendamento_status_var.set(
+                f"⚡ Agendamento retomado (etapa: {etapa_str}) — aguardando horário..."
+            )
+            print(f"📅 Painel Z reaberto: retomando agendamento em etapa '{etapa_str}'.")
+
         self.atualizar_relogio_visual_agendamento()
 
     def _montar_bloco_horario(self, parent, titulo, horas_var, minutos_var, segundos_var, alvo_var, restante_var):
@@ -3466,7 +3541,47 @@ class AutomacaoProeis:
         self.atualizar_relogio_visual_agendamento()
 
     def atualizar_relogio_visual_agendamento(self):
-        if not self.janela_agendamento or not self.janela_agendamento.winfo_exists():
+        janela_aberta = (
+            self.janela_agendamento is not None
+            and self.janela_agendamento.winfo_exists()
+        )
+
+        # Se a janela foi fechada mas o agendamento ainda está rodando,
+        # continua o loop em background sem atualizar UI
+        if not janela_aberta:
+            if self.agendamento_rodando:
+                self.ultimo_heartbeat_agendamento = time.time()
+                agora = self.agora_servidor_sincronizado()
+                if agora and self.agendamento_rodando:
+                    # Etapa login em background
+                    if self.etapa_atual == "login" and self.login_horario_alvo_texto:
+                        atingiu, restante, _ = self.chegou_no_horario_alvo_preciso(
+                            agora, self.login_horario_alvo_texto
+                        )
+                        if atingiu and not self.login_disparado:
+                            self.login_disparado = True
+                            print("📅 Agendamento (background): horario do login atingido. Executando login...")
+                            threading.Thread(target=self._agendamento_executar_login, daemon=True).start()
+                            self.etapa_atual = "disparo"
+                            self.login_horario_alvo_texto = None
+                    # Etapa disparo em background
+                    elif self.etapa_atual == "disparo" and self.disparo_horario_alvo_texto:
+                        atingiu, restante, _ = self.chegou_no_horario_alvo_preciso(
+                            agora,
+                            self.disparo_horario_alvo_texto,
+                            compensacao_ms=self.compensacao_disparo_ms
+                        )
+                        if atingiu and not self.disparo_disparado:
+                            self.disparo_disparado = True
+                            self.agendamento_rodando = False
+                            print("📅 Agendamento (background): horario do disparo atingido. Buscando vagas...")
+                            self.solicitar_inscricao()
+                            return
+
+                intervalo_ms = 1 if self.agendamento_rodando else 200
+                self.agendamento_after_id = self.ui_root.after(
+                    intervalo_ms, self.atualizar_relogio_visual_agendamento
+                )
             return
 
         # Heartbeat usado pelo watchdog anti-congelamento.
@@ -3529,7 +3644,9 @@ class AutomacaoProeis:
                         self.agendamento_status_var.set(
                             "Horário exato do servidor atingido. Executando login automático..."
                         )
-                        self.solicitar_login()
+                        # Usa método dedicado que navega para a página de login primeiro
+                        # (solicitar_login() abandona se não estiver na tela de login)
+                        threading.Thread(target=self._agendamento_executar_login, daemon=True).start()
                         self.etapa_atual = "disparo"
 
                         try:
@@ -3635,7 +3752,19 @@ class AutomacaoProeis:
                 self.agendamento_status_var.set(f"Resincronizado em {agora.strftime('%H:%M:%S')}")
 
     def fechar_painel_duplo_agendamento(self):
-        self.parar_agendamento()
+        """
+        Fecha a janela do painel, mas NÃO cancela o agendamento em execução.
+        O loop (atualizar_relogio_visual_agendamento) verifica winfo_exists() e para
+        sozinho quando a janela não existe — mantendo agendamento_rodando = True
+        em background. Ao reabrir com Z, o painel retoma do ponto atual.
+        """
+        # Cancela o after do Tkinter para evitar erro de callback em janela destruída
+        if self.agendamento_after_id and self.ui_root and self.ui_root.winfo_exists():
+            try:
+                self.ui_root.after_cancel(self.agendamento_after_id)
+            except Exception:
+                pass
+        self.agendamento_after_id = None
 
         if self.janela_agendamento is not None:
             try:
@@ -3647,5 +3776,4 @@ class AutomacaoProeis:
         self.janela_agendamento = None
         self.frame_login = None
         self.frame_disparo = None
-
-        self.retomar_automaticamente_apos_login = False
+        # NÃO chama parar_agendamento() — o agendamento continua rodando em background
