@@ -3,6 +3,8 @@
 > **Robô de automação para inscrições no PROEIS-RJ**  
 > Automatiza login, resolução de captcha e marcação de vagas na escala voluntária do PROEIS com precisão de milissegundos.
 
+ESSE ROBO FOI TESTADO E APROVADO NA CEDE EM 16/07/2026
+
 ---
 
 ## 📋 Índice
