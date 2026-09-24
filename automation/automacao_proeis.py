@@ -112,6 +112,11 @@ class AutomacaoProeis:
         self.ui_root = ui_root
 
         self.sb = None
+        self.sb_context = None
+        self.recuperacao_navegador_em_andamento = False
+        self.ultima_tentativa_recuperacao_navegador = 0.0
+        self.intervalo_recuperacao_navegador = 10.0
+        self.sessao_login_detectada_desde = None
         self.login_em_andamento = False
         self.login_sucesso = False
         self.inscricao_em_andamento = False
@@ -1094,6 +1099,7 @@ class AutomacaoProeis:
         if self.login_em_andamento or self.inscricao_em_andamento:
             return
         if not self.sb or not self.sb.driver:
+            self.recuperar_navegador()
             return
 
         adquiriu_lock = False
@@ -1103,8 +1109,12 @@ class AutomacaoProeis:
                 return
             self.sb.execute_script("return document.readyState")
             self.ultimo_heartbeat_selenium = time.time()
+            if self.pagina_indica_erro_servidor():
+                self.tentar_reabrir_site()
         except Exception as e:
             print(f"⚠️ Heartbeat do navegador falhou: {e}")
+            # O Chrome pode ter sido fechado pelo usuário ou encerrado pelo sistema.
+            # A recuperação é feita fora do heartbeat para evitar disputa do driver.
         finally:
             if adquiriu_lock:
                 try:
@@ -1131,16 +1141,16 @@ class AutomacaoProeis:
         while self.monitor_anti_congelamento_ativo and not self.finalizar_programa:
             try:
                 if self.deve_parar_monitor_anti_congelamento_para_login():
+                    if not self.monitor_anti_congelamento_parado_por_login:
+                        print("⏱️ Último minuto antes do login: pausando ressincronização; watchdog do navegador continua ativo.")
                     self.monitor_anti_congelamento_parado_por_login = True
-                    self.parar_monitor_anti_congelamento(
-                        "faltando 1 minuto para o login agendado"
-                    )
-                    break
+                else:
+                    self.monitor_anti_congelamento_parado_por_login = False
 
                 agora_ts = time.time()
 
                 # Watchdog do loop visual do agendamento.
-                if self.agendamento_rodando:
+                if self.agendamento_rodando and not self.monitor_anti_congelamento_parado_por_login:
                     tempo_sem_heartbeat = agora_ts - self.ultimo_heartbeat_agendamento
                     if tempo_sem_heartbeat > self.limite_congelamento_agendamento:
                         print(
@@ -1155,17 +1165,144 @@ class AutomacaoProeis:
                             print(f"⚠️ Não foi possível reforçar loop visual: {e}")
 
                 # Heartbeat leve do Chrome/Selenium.
-                if (agora_ts - self.ultimo_heartbeat_selenium) >= self.intervalo_heartbeat_selenium:
+                if (not self.monitor_anti_congelamento_parado_por_login
+                        and (agora_ts - self.ultimo_heartbeat_selenium) >= self.intervalo_heartbeat_selenium):
                     self.heartbeat_selenium_seguro()
 
+                # Detecta janela/driver fechados mesmo quando não há automação ativa.
+                if (not self.login_em_andamento and not self.inscricao_em_andamento
+                        and (not self.navegador_responde())
+                        and agora_ts - self.ultima_tentativa_recuperacao_navegador >= self.intervalo_recuperacao_navegador):
+                    self.recuperar_navegador()
+
+                # F5 pode deixar o WebDriver conectado, mas retornar à tela de login.
+                # Nesse caso, reabra a sessão PROEIS sem esperar o heartbeat de 45s.
+                if self.login_sucesso and not self.login_em_andamento and not self.inscricao_em_andamento:
+                    self.verificar_login_apos_atualizacao()
+
                 # Ressincronização periódica para reduzir drift em longas esperas.
-                if self.agendamento_rodando and (agora_ts - self.ultima_resync_periodica) >= self.intervalo_resync_periodica:
+                if (self.agendamento_rodando and not self.monitor_anti_congelamento_parado_por_login
+                        and (agora_ts - self.ultima_resync_periodica) >= self.intervalo_resync_periodica):
                     self.ressincronizacao_periodica_segura()
 
             except Exception as e:
                 print(f"⚠️ Erro no monitor anti-congelamento: {e}")
 
             time.sleep(1)
+
+    def verificar_login_apos_atualizacao(self):
+        """Detecta sessão expirada após F5 e inicia relogin após confirmar a tela."""
+        if self.finalizar_programa or not self.driver_lock.acquire(timeout=0.2):
+            return False
+        try:
+            if not self.sb or self.sb.execute_script("return document.readyState") != "complete":
+                self.sessao_login_detectada_desde = None
+                return False
+
+            if not self.esta_na_pagina_login():
+                self.sessao_login_detectada_desde = None
+                return False
+
+            agora = time.time()
+            if self.sessao_login_detectada_desde is None:
+                self.sessao_login_detectada_desde = agora
+                return False
+            if agora - self.sessao_login_detectada_desde < 1.5:
+                return False
+
+            self.sessao_login_detectada_desde = None
+            print("🔐 A atualização retornou o PROEIS à tela de login. Iniciando relogin automático...")
+            self.tentar_recuperar_sessao_automaticamente("sessão encerrada após F5/atualização")
+            return True
+        except Exception:
+            self.sessao_login_detectada_desde = None
+            return False
+        finally:
+            self.driver_lock.release()
+
+    def recuperar_navegador(self):
+        """Reabre o Chrome após fechamento/quebra da sessão WebDriver e tenta restaurar o login."""
+        if self.finalizar_programa or self.recuperacao_navegador_em_andamento:
+            return False
+        agora = time.time()
+        if agora - self.ultima_tentativa_recuperacao_navegador < self.intervalo_recuperacao_navegador:
+            return False
+        if not self.driver_lock.acquire(timeout=0.2):
+            return False
+
+        self.recuperacao_navegador_em_andamento = True
+        self.ultima_tentativa_recuperacao_navegador = agora
+        tentar_relogin = self.login_sucesso
+        try:
+            print("🔄 Navegador desconectado. Tentando abrir uma nova sessão...")
+            try:
+                if self.sb_context:
+                    self.sb_context.__exit__(None, None, None)
+            except Exception:
+                pass
+            self.sb = None
+            self.sb_context = SB(
+                browser=self.browser, headless=self.headless, uc=self.uc,
+                incognito=self.incognito, extension_dir=self.extension_dir,
+            )
+            self.sb = self.sb_context.__enter__()
+            self.sb.open(PROEIS_URL)
+            self.sb.wait_for_ready_state_complete(timeout=20)
+            self.ultimo_heartbeat_selenium = time.time()
+            if tentar_relogin:
+                print("🔐 Restaurando a sessão do PROEIS...")
+                self.login_sucesso = False
+                self.tentar_recuperar_sessao_automaticamente("após reabrir o navegador")
+            else:
+                print("✅ Navegador reaberto. Faça login com Ctrl+1 para continuar.")
+            return True
+        except Exception as e:
+            print(f"⚠️ Falha ao recuperar navegador/site: {e}. Nova tentativa em breve.")
+            try:
+                if self.sb_context:
+                    self.sb_context.__exit__(None, None, None)
+            except Exception:
+                pass
+            self.sb = None
+            self.sb_context = None
+            return False
+        finally:
+            self.recuperacao_navegador_em_andamento = False
+            self.driver_lock.release()
+
+    def pagina_indica_erro_servidor(self):
+        """Reconhece páginas de indisponibilidade exibidas pelo Chrome ou pelo servidor."""
+        try:
+            texto = (self.sb.get_page_source() or "").lower()
+            marcadores = (
+                "err_connection", "err_timed_out", "err_name_not_resolved",
+                "this site can’t be reached", "this site can't be reached",
+                "service unavailable", "http error 500", "http error 502",
+                "http error 503", "bad gateway", "gateway timeout",
+            )
+            return any(marcador in texto for marcador in marcadores)
+        except Exception:
+            return False
+
+    def tentar_reabrir_site(self):
+        """Tenta novamente a página inicial após uma indisponibilidade transitória."""
+        agora = time.time()
+        if agora - self.ultima_tentativa_recuperacao_navegador < self.intervalo_recuperacao_navegador:
+            return False
+        self.ultima_tentativa_recuperacao_navegador = agora
+        tentar_relogin = self.login_sucesso
+        try:
+            print("🌐 Página de erro/servidor indisponível. Tentando reconectar ao PROEIS...")
+            self.sb.open(PROEIS_URL)
+            self.sb.wait_for_ready_state_complete(timeout=20)
+            if tentar_relogin and self.esta_na_pagina_login():
+                self.login_sucesso = False
+                self.tentar_recuperar_sessao_automaticamente("após indisponibilidade do site")
+            self.ultimo_heartbeat_selenium = time.time()
+            return not self.pagina_indica_erro_servidor()
+        except Exception as e:
+            print(f"⚠️ PROEIS ainda indisponível: {e}. Nova tentativa será feita automaticamente.")
+            return False
 
     # ==================== CONTROLE DE SAÍDA ====================
 
@@ -1223,16 +1360,29 @@ class AutomacaoProeis:
     # ==================== EXECUÇÃO ====================
 
     def executar(self):
-        with SB(
+        self.sb_context = SB(
             browser=self.browser,
             headless=self.headless,
             uc=self.uc,
             incognito=self.incognito,
             extension_dir=self.extension_dir,
-        ) as sb:
-            self.sb = sb
+        )
+        try:
+            self.sb = self.sb_context.__enter__()
 
-            self.sb.open(PROEIS_URL)
+            while not self.finalizar_programa:
+                try:
+                    self.sb.open(PROEIS_URL)
+                    self.sb.wait_for_ready_state_complete(timeout=20)
+                    if not self.pagina_indica_erro_servidor():
+                        break
+                    raise RuntimeError("O servidor PROEIS retornou uma página de erro")
+                except Exception as e:
+                    print(f"⚠️ PROEIS indisponível na inicialização: {e}. Nova tentativa em 10 segundos...")
+                    time.sleep(self.intervalo_recuperacao_navegador)
+                    if not self.navegador_responde():
+                        self.ultima_tentativa_recuperacao_navegador = 0.0
+                        self.recuperar_navegador()
             self.iniciar_monitoramento_usuario()
             self.iniciar_monitor_anti_congelamento()
 
@@ -1263,6 +1413,25 @@ class AutomacaoProeis:
                 self.parar_agendamento()
                 self.remover_hotkeys()
                 self.sb = None
+                try:
+                    if self.sb_context:
+                        self.sb_context.__exit__(None, None, None)
+                except Exception:
+                    pass
+                self.sb_context = None
+        except Exception as e:
+            print(f"❌ Falha ao iniciar ou manter o navegador: {e}")
+            raise
+        finally:
+            self.parar_monitor_anti_congelamento("encerramento do sistema")
+            self.remover_hotkeys()
+            try:
+                if self.sb_context:
+                    self.sb_context.__exit__(None, None, None)
+            except Exception:
+                pass
+            self.sb = None
+            self.sb_context = None
 
     # ==================== LOGIN ====================
 
@@ -1674,13 +1843,33 @@ class AutomacaoProeis:
                     print("Login realizado com sucesso!" if not modo_relogin else "⚡ Relogin turbo realizado com sucesso!")
                     self.verificar_autorizacao_usuario()
 
-                    if self.retomar_automaticamente_apos_login:
-                        if modo_relogin:
-                            self.preparar_fluxo_pos_relogin_turbo("relogin turbo")
+                    while not self.finalizar_programa:
+                        if self.retomar_automaticamente_apos_login:
+                            if modo_relogin:
+                                preparado = self.preparar_fluxo_pos_relogin_turbo("relogin turbo")
+                            else:
+                                preparado = self.preparar_fluxo_pos_relogin_automatico("relogin automático")
                         else:
-                            self.preparar_fluxo_pos_relogin_automatico("relogin automático")
-                    else:
-                        self.preparar_pagina_escala("pós-login")
+                            preparado = self.preparar_pagina_escala("pós-login")
+
+                        if preparado:
+                            break
+
+                        # A tela de login significa que a autenticação foi perdida,
+                        # mesmo que o captcha anterior tenha sido aceito.
+                        if self.esta_na_pagina_login():
+                            print("⚠️ PROEIS voltou à tela de login durante a preparação. Reiniciando o login automático...")
+                            self.login_sucesso = False
+                            captcha_ok = False
+                            break
+
+                        # A sessão está autenticada, mas o menu/escala ainda não abriu.
+                        # Repetir a navegação sem descartar a autenticação já obtida.
+                        print("🔄 Login aceito, mas a página inicial não abriu. Tentando preparar o Menu Voluntário novamente em 3s...")
+                        self.sb.sleep(3)
+
+                    if not self.login_sucesso:
+                        continue
                 else:
                     print("Captcha inválido.")
                     self.limpar_campo_se_existir("input#TextCaptcha")
@@ -1702,7 +1891,35 @@ class AutomacaoProeis:
 
     def fazer_login(self):
         with self.driver_lock:
-            return self._executar_login_sem_lock()
+            tentativa = 0
+            while not self.finalizar_programa and not self.login_sucesso:
+                tentativa += 1
+                try:
+                    if not self.navegador_responde():
+                        print("🔄 Navegador caiu durante o login. Reabrindo para continuar...")
+                        try:
+                            if self.sb_context:
+                                self.sb_context.__exit__(None, None, None)
+                        except Exception:
+                            pass
+                        self.sb = None
+                        self.sb_context = SB(
+                            browser=self.browser, headless=self.headless, uc=self.uc,
+                            incognito=self.incognito, extension_dir=self.extension_dir,
+                        )
+                        self.sb = self.sb_context.__enter__()
+                        self.sb.open(PROEIS_URL)
+
+                    if self._executar_login_sem_lock():
+                        return True
+                except Exception as e:
+                    print(f"⚠️ Erro temporário no login: {e}.")
+
+                if not self.finalizar_programa:
+                    pausa = min(5 * tentativa, 30)
+                    print(f"🔁 Tentando fazer login novamente em {pausa}s (tentativa {tentativa}).")
+                    time.sleep(pausa)
+            return bool(self.login_sucesso)
 
     def captcha_valido_login(self):
         return not self.sb.is_element_visible(
@@ -2064,21 +2281,44 @@ class AutomacaoProeis:
             return False
 
     def tentar_recuperar_sessao_automaticamente(self, motivo="sessão perdida"):
-        if self.finalizar_programa or self.interromper_inscricao or not self.inscricoes:
+        if self.finalizar_programa or self.interromper_inscricao:
             return False
 
-        print(f"🔐 Sessão interrompida detectada ({motivo}). Iniciando login automático para continuar de onde parou...")
+        print(f"🔐 Sessão interrompida detectada ({motivo}). O sistema tentará novamente até concluir o login...")
         self.login_sucesso = False
         estado_anterior = self.retomar_automaticamente_apos_login
-        self.retomar_automaticamente_apos_login = True
+        self.retomar_automaticamente_apos_login = bool(self.inscricoes) or estado_anterior
 
         try:
-            sucesso = self._executar_login_sem_lock(modo_relogin=True)
-            if sucesso:
-                print("✅ Relogin automático concluído. Retomando a marcação da vaga pendente...")
-            else:
-                print("❌ Não foi possível concluir o relogin automático.")
-            return bool(sucesso)
+            tentativa = 0
+            while not self.finalizar_programa and not self.interromper_inscricao:
+                tentativa += 1
+                try:
+                    if not self.navegador_responde():
+                        print(f"🔄 Navegador indisponível durante o login (tentativa {tentativa}). Reabrindo...")
+                        try:
+                            if self.sb_context:
+                                self.sb_context.__exit__(None, None, None)
+                        except Exception:
+                            pass
+                        self.sb = None
+                        self.sb_context = SB(
+                            browser=self.browser, headless=self.headless, uc=self.uc,
+                            incognito=self.incognito, extension_dir=self.extension_dir,
+                        )
+                        self.sb = self.sb_context.__enter__()
+                        self.sb.open(PROEIS_URL)
+
+                    if self._executar_login_sem_lock(modo_relogin=True):
+                        print("✅ Relogin automático concluído.")
+                        return True
+                except Exception as e:
+                    print(f"⚠️ Erro temporário durante o relogin: {e}.")
+
+                pausa = min(5 * tentativa, 30)
+                print(f"⚠️ Login automático não concluiu. Nova tentativa em {pausa}s (tentativa {tentativa}).")
+                time.sleep(pausa)
+            return False
         finally:
             self.retomar_automaticamente_apos_login = estado_anterior
 
@@ -3606,11 +3846,8 @@ class AutomacaoProeis:
                         and 0 < restante <= self.parar_monitor_antes_login_segundos
                     ):
                         self.monitor_anti_congelamento_parado_por_login = True
-                        self.parar_monitor_anti_congelamento(
-                            "faltando 1 minuto para o login agendado"
-                        )
                         self.agendamento_status_var.set(
-                            "Monitor anti-congelamento parado. Faltam até 1 minuto para o login."
+                            "Ressincronização pausada; monitor do navegador continua ativo até o login."
                         )
 
                     if (not self.login_resincronizacao_final_feita) and 0 < restante <= self.segundos_resincronizacao_final:
@@ -3708,7 +3945,8 @@ class AutomacaoProeis:
         self.agendamento_after_id = self.ui_root.after(intervalo_ms, self.atualizar_relogio_visual_agendamento)
 
     def parar_agendamento(self):
-        self.parar_monitor_anti_congelamento("agendamento parado")
+        # Encerrar o cronômetro/painel não deve desligar o watchdog do navegador.
+        # Ele também detecta sessão expirada após F5, inclusive depois do agendamento.
         self.agendamento_rodando = False
         self.login_horario_alvo_texto = None
         self.disparo_horario_alvo_texto = None
